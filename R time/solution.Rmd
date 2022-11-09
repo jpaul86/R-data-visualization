@@ -1,0 +1,184 @@
+---
+title: "Problemset: Time"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: paged
+    code_folding: show  
+    highlight: tango
+    number_sections: true
+---
+
+# Setup
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+
+```{r}
+library(tidyverse) 
+library(lubridate)
+library(ggrepel)
+theme_set(theme_bw())
+```
+
+## Data
+We use bakery sales data provided by [Meteolytix](https://meteolytix.de/) for some unknown bakery of the Kiel region. Additionally, we use weather data from Deutscher Wetterdienst (DWD).
+
+```{r}
+sales <- read_csv("data/sales.csv")        # Bakery sales
+weather <- read_csv("data/weather.csv")    # Weather data
+df <- sales %>% left_join(weather, by = "date")
+```
+
+## Feature engineering
+```{r}
+df <- df %>%
+  mutate(
+    wday = lubridate::wday(date, label=TRUE, abbr=FALSE, week_start = 1),
+    month = month(date, label=TRUE, abbr = FALSE),
+    year = year(date),
+    dayofyear = yday(date))
+```
+
+The product types in the data are represented with anonymous numbers (1-6). Part of your task is to infer which number corresponds to which actual type:  bread, rolls, cakes, drinks, patisserie, snacks. 
+
+
+Visualize the full time series of total daily sales. Which trends or patterns do you see?
+
+```{r}
+df %>%
+  group_by(date) %>%
+  summarise(sales = sum(sales)) %>%
+  ggplot(aes(date, sales)) +
+  geom_line(size=0.1, alpha=0.6) +
+  geom_smooth(formula=y ~ s(x, bs='cs', k=20), size=2) +   # Smoothness paramter: k
+  scale_x_date(
+    date_breaks = "12 months",        # Distance between labeled breaks
+    date_minor_breaks = "3 month",    # Distance between grid lines
+    date_labels = "%Y\n%b-%d"         # Date labels format 
+  )
+
+```
+
+
+
+
+```{r}
+df %>% 
+  mutate(week_year = lubridate::floor_date(date, unit="weeks", week_start=1)) %>% 
+  group_by(week_year) %>%
+  summarise(sales = sum(sales)) %>%
+  ggplot(aes(week_year, sales)) +
+  geom_line(size=1) + geom_point() +
+  scale_x_date(
+    date_breaks = "12 months",          # Distance between labeled breaks
+    date_minor_breaks = "6 month",     # Distance between grid lines
+    date_labels = "%Y-%m-%d"         # Date labels format 
+  ) +
+  scale_y_continuous(labels=scales::comma)
+```
+
+
+Visualize the full time series of daily sales per product type. Which product-specific patterns do you perceive?
+```{r}
+df %>% 
+  mutate(month_date = lubridate::floor_date(date, unit="months")) %>% 
+  group_by(month_date, product_type = factor(product_type)) %>%
+  summarise(sales = sum(sales)) %>%
+  ggplot(aes(month_date, sales, color = product_type)) +
+  geom_line(size = 1) + geom_point(size = 2) +
+  #geom_smooth(size=1, span=0.3, se=FALSE) + 
+  scale_x_date(
+    date_breaks = "12 months",          # Distance between labeled breaks
+    date_minor_breaks = "6 month",     # Distance between grid lines
+    date_labels = "%Y-%m-%d"         # Date labels format 
+  ) +
+  scale_y_continuous(labels=scales::comma) +
+  scale_color_brewer(palette = "Set1")
+
+```
+
+
+Zoom in on a particular year to visualize the intra-year patterns. Which patterns do you see?
+```{r}
+
+df %>% mutate(holiday = ifelse(month=='Dezember' & day(date)==31, 1, 0))
+
+df %>% 
+  filter(year==2018) %>%
+  mutate(holiday = ifelse(month=="Dezember" & day(date)==31, "New Year's Eve", NA)) %>%
+  group_by(date, holiday) %>% 
+  summarise(sales = mean(sales)) %>% 
+  ggplot(aes(date, sales)) +
+  geom_line() + geom_point() +
+  geom_text_repel(aes(label = holiday))
+
+```
+
+
+Visualize intra-week sales patterns. On which day does the bakery sell the most/least?
+```{r}
+df %>%
+  group_by(wday) %>%
+  summarise(sales = mean(sales)) %>%
+  ggplot(aes(x=wday, y=sales)) +
+  geom_point(size = 3) + geom_line(aes(group = 1)) +
+  scale_color_brewer(palette = "Set1")
+```
+```{r}
+df %>%
+  group_by(wday) %>%
+  summarise(sales = mean(sales)) %>%
+  ggplot(aes(x=wday, y=sales)) +
+  geom_col(fill = 'lightgrey', col = "black") +
+  scale_color_brewer(palette = "Set1")
+```
+
+
+
+Visualize the average daily sales per weekday and product type? Which product-specific patterns do you see?
+```{r}
+df %>%
+  group_by(wday, product_type = factor(product_type)) %>%
+  summarise(sales = mean(sales)) %>%
+  ggplot(aes(x=wday, y=sales, color=product_type)) +
+  geom_point(size = 3) + 
+  geom_line(aes(group=product_type), size = 1.5) +
+  scale_color_brewer(palette = "Set1")
+
+```
+
+```{r}
+df %>%
+  group_by(wday, product_type = factor(product_type)) %>%
+  summarise(sales = mean(sales)) %>%
+  ggplot(aes(x=wday, y=sales)) +
+  geom_col() + 
+  scale_color_brewer(palette = "Set1") +
+  facet_wrap(vars(product_type)) +
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+
+Is there a relationship between weather features (sunshine, temperature, rain) and sales?
+```{r}
+df %>%
+  ggplot(aes(x = temperature, y = sales)) +
+  geom_point(alpha = 0.1) + geom_smooth(size = 1.5) +
+  facet_wrap(vars(product_type), scales = "free_y")
+
+```
+
+```{r}
+df %>%
+  ggplot(aes(x = sunhours, y = sales)) +
+  geom_point(alpha = 0.1) + geom_smooth(size = 1.5) +
+  facet_wrap(vars(product_type), scales = "free_y")
+```
+
+
+
+
