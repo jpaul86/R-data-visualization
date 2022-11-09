@@ -1,0 +1,490 @@
+---
+title: "Visualization Project"
+author: "Jannik Paul, 940134"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    toc: yes
+    toc_float: yes
+    df_print: paged
+    code_folding: show
+    highlight: tango
+    number_sections: no
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning=FALSE, message = FALSE)
+```
+
+```{r Libraries, message=FALSE, echo=FALSE}
+#if(!require("eurostat")) install.packages("eurostat")
+#if(!require("rnaturalearth")) install.packages("rnaturalearth")
+#if(!require("rnaturalearthdata")) install.packages("rnaturalearthdata")
+#if(!require("sf")) install.packages("sf")
+#if(!require("smoothr")) install.packages("smoothr")
+#if(!require("cowplot")) install.packages("cowplot")
+#if(!require("viridis")) install.packages("viridis")
+#if(!require("hrbrthemes")) install.packages("hrbrthemes")
+
+
+# Essentials
+library(tidyverse)
+library(lubridate)
+# Data
+library(eurostat)
+# Graphs
+#library(treemapify)
+library(sf)
+library(grid)
+library(directlabels)
+library(smoothr)
+library(stringr)
+library(cowplot)
+library(scales)
+library(ggplot2)
+library(ggrepel)
+#library(gridExtra)
+library(viridis)
+library(hrbrthemes)
+if(!require("roboto_condensed()")) install.packages("hrbrthemes::import_roboto_condensed()")
+#library(plotly)
+library(gganimate)
+library(data.table)
+library(shadowtext)
+```
+# European Energy Generation Analysis
+https://ropengov.github.io/eurostat/articles/eurostat_tutorial.html
+
+```{r Loading data, message=FALSE, warning=FALSE}
+clean_eurostat_cache() # clean local cache to get newest data
+```
+## Introduction
+
+https://ec.europa.eu/eurostat/de/web/energy/overview
+```{r}
+
+toc <- get_eurostat_toc() # Table Of Content to easily search for datasets
+```
+
+## Plot 1 - timeseries
+How have energy prices developed for households during the last 5 years?
+
+```{r}
+euro_plot_1 <- get_eurostat("nrg_pc_204", filters = list(unit = "KWH")) %>% # load first dataset
+  label_eurostat(code = c("unit", "geo")) %>% 
+  select(!unit) %>% 
+  relocate(geo, .after = geo_code) %>% 
+  pivot_wider(names_from = consom,
+              values_from = values) # pivot wider to expand and draw information
+```
+
+```{r}
+selection_plot_1 <- euro_plot_1 %>% # We select a timeseries df with geo_code, geo, time, price, currency, whose resolution is biannual
+  rename(price = "Band DC : 2 500 kWh < Consumption < 5 000 kWh") %>% 
+  filter(tax == "All taxes and levies included") %>% # filter only those with have taxes and levies included as we're looking at households
+  select(geo_code, geo, time, price, currency) %>% # select the columns
+  filter(geo_code %in% c("EU27_2020", "DE", "FR", "IT", "ES")) %>% # filter from geo_code strings which have c("a","b") in them
+  filter(currency == "Euro") %>% # only looking at Euro to normalize currency
+  group_by(time) %>% 
+  filter(time >= "2017-01-01" & time <= "2022-01-01") # filter timeframe
+```
+
+```{r}
+plot_1 <- selection_plot_1 %>% 
+  ggplot() + 
+  geom_line(aes(x = time, y = price, color = geo)) + # encoded by position across a timescale with x = t
+  guides(fill = guide_legend(reverse=TRUE)) + # order the legend
+  geom_point(aes(x=time, y=price, color = geo)) + # for the points plot
+  labs(title = "Price of electricity for European households", # adding all labels separately according to grammar of graphics
+       subtitle = "(all taxes and levies incl.)",
+       fill = "kWh Price",
+       x = "",
+       y = "EUR / kWh",
+       col="Countries"#, tag = "Plot 1"
+       ) +
+  theme(
+    legend.background = element_rect(fill = "lightblue"), # adjusting the theme separately according to grammar of graphics
+    legend.key.size = unit(1.5, "cm"),
+    legend.key.width = unit(0.5,"cm"),
+    plot.title = element_text(
+      family = "Econ Sans Cnd", 
+      face = "bold",
+      size = 15), # adjust plot title
+    plot.subtitle = element_text(
+      family = "Econ Sans Cnd",
+      size = 10) # adjust plot subtitle
+    ) +  
+  scale_color_manual(labels = c("full EU average", "France", "Germany", "Italy", "Spain"),
+                     values = c("blue", "pink", "black", "green", "orange")) # France gets pink. Spain in yellow was not expressive enough.
+
+plot_1
+
+grid.text(
+  "Source: Eurostats - Electricity prices for household consumers (nrg_pc_204)", # add text upon a second grid layer and adjusting its pos
+  x = 0.08, 
+  y = 0.022, 
+  just = c("left", "bottom"),
+  gp = gpar(
+    col = "grey50",
+    fontsize = 8,
+    fontfamily = "Econ Sans Cnd"
+  )
+)
+
+grid.lines(
+  x = c(0.017, 0.988),
+  y = 1,
+  gp = gpar(col = "#202020", lwd = 2) # add line on second grid layer and adjust x = length, y = position (1 at the top), color hexadecimal
+)
+
+grid.rect(
+  x = 0.015,
+  y = 1,
+  width = 0.05,
+  height = 0.025,
+  just = c("left", "top"),
+  gp = gpar(fill = "#202020", lwd = 0) # add rectangle similarly
+)
+
+```
+Here can see how the prices of
+
+
+## Plot 2 - timeseries with animation
+
+Understanding price - does EUR / kWh scale with the absolute amount of energy generated? Are there scaling effects that a country benefits from with high energy production? Let's look at the correlation over time:
+
+```{r}
+###################
+# Get new dataset #
+###################
+
+euro_plot_2 <- get_eurostat("nrg_cb_pem") %>% # get a new dataset
+  label_eurostat(code = c("unit", "geo")) %>% 
+  select(!unit) %>% 
+  relocate(geo, .after = geo_code)
+
+#############
+# Selection #
+#############
+```
+```{r}
+selection_plot_2 <- euro_plot_2 %>% 
+  rename(GWh = "values") %>% 
+  filter(siec == "Total") %>%
+  select(geo_code, geo, time, GWh) %>% 
+  filter(geo_code %in% c("EU27_2020", "DE", "FR", "IT", "ES")) %>% 
+  group_by(time) %>% 
+  #filter(time >= "2017-01-01" & time < "2022-01-01") %>%
+  filter(time >= "2017-01-01" & time <= "2022-01-01") %>% 
+  group_by(geo_code, geo, month = lubridate::floor_date(time, "halfyear")) %>%  # floor date from monthly to biannually, new col month (not to lose data!)
+  summarize(GWh = sum(GWh), .groups = 'drop') %>% 
+  rename(time = "month") # rename month now
+
+# https://lubridate.tidyverse.org/reference/round_date.html
+# https://stackoverflow.com/questions/33221425/how-do-i-group-my-date-variable-into-month-year-in-r
+
+
+# Instead of merging, we update. This is computationally simpler as it uses less memory and does not copy entire dataframes. It takes the columns geo, GWh and price and updates a dataframe that is only matched upon geo_code and time.  https://stackoverflow.com/questions/31876335/merge-2-dataframes-by-matching-dates
+
+merged_selection_plot_2 <- setDT(selection_plot_1)[setDT(selection_plot_2), c("geo", "GWh", "price") := 
+                .(geo, GWh, price), on=c("geo_code", "time")] 
+merged_selection_plot_2$currency <- NULL # best performing way to drop column
+
+merged_selection_plot_2 <- merged_selection_plot_2 %>% 
+  rename(Price = "price")
+
+merged_selection_plot_2 <- merged_selection_plot_2[!grepl("EU27_2020", merged_selection_plot_2$geo_code),] # Remove all rows containing the EU
+
+### prepare the animation
+
+plot_2 <- ggplot(merged_selection_plot_2, aes(GWh, Price, size = Price, color = geo_code)) +
+  geom_point() +
+  scale_x_log10() + # adjust scale of x
+  theme_light() + # theme_light() helps for the grid
+  labs(title= "Does high energy output lead to low prices?",
+       subtitle = 'Date: {frame_time}', # rolling date as the animation moves
+       x = 'Total energy generated in GWh',
+       y = 'kWh Price',
+       #col=c("Countries", "Price"), 
+       tag = "Plot 2"
+       ) +
+  transition_time(time) +
+  ease_aes('linear') +
+  #scale_x_continuous(labels = comma)+ 
+  theme(
+    legend.background = element_rect(fill = "white"),
+    legend.key.size = unit(1, "cm"),
+    legend.key.width = unit(1.5,"cm"),
+    legend.text=element_text(size=13)) +  
+  scale_color_manual(name="Countries", labels = c("Germany", "Spain", "France", "Italy"), values = c("black", "orange", "royalblue", "darkgreen")) # France gets royal blue now as apology
+
+################
+### animate! ###
+################
+
+ animate(plot_2, fps=10, renderer = gifski_renderer(loop = TRUE)) # The recipient may not see the GIF in time, so it is better to loop it
+```
+The further the bubbles are to the right, the larger the total energy output of a nation is.
+The larger and the higher a bubble is, the higher the price. The countries are represented in their known colors.  
+
+We see them moving over time, and it is best to focus on one point in particular and look at its course over time.  
+
+We see that there are none of the countries we look at wandering across the grid into a certain direction over time. This implies to us that there might not be a correlation between the kWh price and the total amount of energy generated in a given country.  
+
+If we specifically compare Germany in black and France in royal blue, we see at first sight that there *cannot* be a strong correlation between price and total energy generated. Hence we must question ourselves, can economies of scale really affect price regarding the generation of energy? Either the correlation is weak, or dominated by other correlations.  
+
+The strong jump that Spain makes implies that there are much stronger factors at play we have to discover yet!
+
+Our quest of exploration continues.
+
+
+## Plot 3 - two scatterplots, two tables, and more than two labels
+While we are hunting for the reasons of price pushes, we think of the notions often put forward by the opponents of green energy:  
+
+There are many fake arguments against renewables like wind and solar or other forms of green energy like modern nuclear power. There are efficient consumer forms of energy like electric cars and modern heat pumps as well which are having a hard time with many fake arguments getting religiously repeated.  
+
+In order to see if the critics are right with the notion that green energy is more expensive than other forms of energy, let us check out if there are dependencies by looking at the EU in total and the 4 largest countries in the year 2021.
+
+```{r}
+euro_plot_3 <- get_eurostat("nrg_cb_pem") %>% 
+  label_eurostat(code = c("unit", "geo")) %>% 
+  select(!unit) %>% 
+  relocate(geo, .after = geo_code)
+```
+
+```{r}
+# To confirm we calculated correctly: From the total energy production we subtract all green energy ('nuclear', 'hydro', 'geothermal', 'wind', 'solar', 'other renewables'). We receive the sum of 'Combustible fuels'. This shows: 'Green Energy' = 'Total' - 'Combustible fuels'.
+
+selection_plot_3 <- euro_plot_3 %>%
+  filter(time >= "2021-01-01" & time < "2022-01-01") %>%  # only take 12 months of 2021
+  select(geo_code, geo, time, siec, values) %>% # select the columns to consider
+  #filter(geo_code %in% c("EU27_2020", "DE", "FR", "IT", "ES")) %>% # filter rows to countries to look at
+  filter(geo_code %in% c("EU27_2020", "AT", "CZ", "DK", "DE", "EL", "ES", "IT", "FI", "FR", "HU", "IE", "NL", "BE", "PL", "PT", "SE", "SK")) %>%
+  filter(siec %in% c("Combustible fuels", "Total")) %>% # reduce siec to just non-green and total
+  group_by(geo_code, geo, siec, month = lubridate::floor_date(time, "year")) %>% # floor date to one year
+  summarize(values = sum(values), .groups = 'drop') %>% # floor date to one year, summarize values
+  rename(time = "month")
+```
+
+```{r}
+#rm(euro_plot_3) # drop to free up memory
+```
+
+```{r}
+price_selection_plot_3 <- euro_plot_1 %>% 
+  rename(price = "Band DC : 2 500 kWh < Consumption < 5 000 kWh") %>% 
+  filter(tax == "All taxes and levies included") %>%
+  filter(currency == "Euro") %>%
+  select(geo_code, geo, time, price) %>% 
+  filter(geo_code %in% c("EU27_2020", "AT", "CZ", "DK", "DE", "EL", "ES", "IT", "FI", "FR", "HU", "IE", "NL", "BE", "PL", "PT", "SE", "SK")) %>% 
+  group_by(time) %>% 
+  filter(time >= "2021-01-01" & time < "2022-01-01") %>% 
+  group_by(geo_code, geo, month = lubridate::floor_date(time, "year")) %>%
+  summarize(price = mean(price), .groups = 'drop') %>%
+  rename(time = "month")
+```
+
+```{r}
+large_green_selection_plot_3 <- selection_plot_3
+
+large_green_selection_plot_3 <- large_green_selection_plot_3 %>%
+  group_by(geo_code) %>%
+  mutate(greens = values - lag(values, default = first(values))) %>% 
+  filter(siec == "Total") %>% 
+  select(geo_code, geo, time, values, greens) %>% 
+  rename(total = "values") %>% 
+  mutate(geo=replace(geo, geo_code=="DE", "Germany")) %>%
+  mutate(geo=replace(geo, geo_code=="EU27_2020", "EU-mean")) %>%
+  mutate(total=replace(total, geo_code=="EU27_2020", (total/27))) %>% 
+  mutate(greens=replace(greens, geo_code=="EU27_2020", (greens/27))) #%>%   
+  #as.data.frame()
+```
+
+```{r}
+large_green_selection_plot_3 <- setDT(large_green_selection_plot_3)[setDT(price_selection_plot_3),
+                                                         c("geo", "total", "greens", "price") := 
+                                                           .(geo, total, greens, price), on=c("geo_code", "time")] 
+```
+
+```{r}
+green_selection_plot_3 <- large_green_selection_plot_3 %>% 
+  filter(geo_code %in% c("EU27_2020", "DE", "SE", "FR", "IT", "ES"))
+```
+
+```{r}
+# Use tags with repellents for our favorite nations
+# A similar scatterplot was used in my first challenge
+# But it takes a lot of work on wrangling tidying and cleaning
+# to prepare the data for this plot to properly work
+# also I customized it further for this
+options(scipen=999)
+
+plot_3 <- ggplot(data = large_green_selection_plot_3, mapping = aes(x=((greens/total)*100),y=(price*100)))+
+  geom_point(aes(size=(total), color=(greens/total)), alpha=0.8) +
+  #scale_color_gradient2(low="black", mid="grey" high="green") +
+  #scale_fill_gradient(low="blue", high="green") +
+  guides(colour = "none") +
+  geom_point(data=green_selection_plot_3, color="black", size=1) + # black geom point only for the larger countries and the EU mean
+  geom_text_repel(data=large_green_selection_plot_3, box.padding = 0.8, max.overlaps = Inf, aes(label=geo)) + # add padding for text, assign text in aes
+  guides(size = guide_legend("Total output (GWh)")) +
+  scale_fill_gradient(labels = percent) +
+  theme_light(base_size = 10) +
+  xlab("Share of green energy (%)") + ylab("Cent / kWh") +
+  ggtitle("Does the price depend on how much energy is green?")
+
+plot_3
+
+# No grid text here. Just like with the animation it would overwhelm.
+
+```
+The size of the bubble shows the size of the energy sector.  
+The lighter the bubbles are towards fresh-sky-blue, the more carbon neutral the energy mix.
+
+Sweden and France both are the uncontested leaders in carbon neutral energy production. Their energy prices are far below of what German or Danish households need to pay as well. Both Germany and Denmark have a far less green energy mix and are using more combustibles.  
+
+So we can safely assume that the end price does not solely depend on how much of the energy mix of a country is carbon neutral either!
+
+It is interesting to see that Germany is having a worse energy mix than the actual **average** of the European Union - while being much more expensive!  
+
+Also, Poland and the Netherlands have a very questionable energy mix.
+
+## Plot 4  
+
+```{r}
+euro_plot_3 %>%
+   distinct(siec) %>%
+   pull(siec) # Gather fuel types. Check out values in table to confirm Hydro=(Mixed hydro power+Pumped hydro power+Pure hydro power)
+```
+
+```{r}
+selection_plot_4 <- euro_plot_3 %>%
+  filter(time >= "2021-01-01" & time < "2022-01-01") %>%  # only take 12 months of 2021
+  select(geo_code, geo, time, siec, values) %>% # select the columns to consider
+  filter(geo_code %in% c("DE", "ES", "FR", "IT", "PL")) %>% # filter rows to countries to look at
+  filter(siec %in% c("Solar", "Wind", "Hydro", "Geothermal", "Nuclear fuels and other fuels n.e.c.", "Coal and manufactured gases", "Natural gas", "Oil and petroleum products (excluding biofuel portion)","Other fuels n.e.c.")) %>% # reduce siec to totals of each kind of fuel type
+  group_by(geo_code, geo, siec, month = lubridate::floor_date(time, "year")) %>% # floor date to one year
+  summarize(values = sum(values), .groups = 'drop') %>% # summarize values
+  rename(time = "month") %>% 
+  mutate(geo=replace(geo, geo_code=="DE", "Germany")) %>% # Adjust Germany's name
+  mutate(siec=replace(siec, siec=="Nuclear fuels and other fuels n.e.c.", "Nuclear")) %>% # shorten fuel type descr
+  mutate(siec=replace(siec, siec=="Oil and petroleum products (excluding biofuel portion)", "Oil")) %>% # shorten fuel type descr
+    mutate(siec=replace(siec, siec=="Coal and manufactured gases", "Coal and gas")) %>% # shorten fuel type descr
+    mutate(siec=replace(siec, siec=="Other fuels n.e.c.", "Others")) # shorten fuel type descr
+```
+
+```{r}
+price_selection_plot_4 <- price_selection_plot_3 # paste into new object for plot 4
+merged_selection_plot_4 <- setDT(selection_plot_4)[setDT(price_selection_plot_4),
+                                                         c("geo", "siec", "values", "price") := 
+                                                           .(geo, siec, values, price), on=c("geo_code", "time")] # merge/update on geo_code and time
+
+merged_selection_plot_4$price <- formatC(merged_selection_plot_4$price*100, digits=1, format="f") # format column price for "0.32123" to "32.1"
+merged_selection_plot_4$cent <- paste(merged_selection_plot_4$geo,",", merged_selection_plot_4$price,"c/kWh") # new col to concatenate price to geo
+merged_selection_plot_4$price <- as.numeric(as.character(merged_selection_plot_4$price)) # turn price from chr to num to sort the barplot
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+
+```
+
+```{r}
+str(merged_selection_plot_4)
+```
+
+
+```{r}
+plot_4 <- ggplot(merged_selection_plot_4) +
+  geom_col(position="fill", stat="identity") +
+  aes(x = (values/1000), y = reorder(cent,price), fill = siec, width = 0.5) + # y bars are identified by cent, but ordered desc by price
+  guides(fill=guide_legend(title="Ressource type")) + 
+  #geom_col(position="fill", stat="identity") +
+  #geom_col(position="stack") +
+  scale_x_continuous(position = "top", expand = c(0, 0)) +
+  scale_y_discrete(expand = expansion(add = c(0.5, 0.5))) +
+  scale_fill_viridis(discrete = T) +
+  #ggtitle("Heterogenity of energy mix (2021)") +
+  theme(
+    panel.background = element_rect(fill = "white"),
+    panel.grid.major.x = element_line(color = "#A8BAC4", size = 0.3),
+    axis.ticks.length = unit(0, "mm"),
+    #axis.text.y = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.text.x = element_text(family = "Econ Sans Cnd", size = 8),
+    axis.line.y.left = element_line(color = "black")
+    ) +
+  xlab("") +
+  ylab("") +
+  labs(
+    title = "Heterogenity of Energy Mix",
+    subtitle = "Distribution of energy types by selected countries, 2021"
+    ) + 
+  theme(
+    plot.title = element_text(
+      family = "Econ Sans Cnd", 
+      face = "bold",
+      size = 15),
+    plot.subtitle = element_text(
+      family = "Econ Sans Cnd",
+      size = 10)
+    )
+
+plot_4
+
+grid.text(
+  "Source: Eurostats - Net electricity generation by type of fuel (nrg_cb_pem)", 
+  x = 0.11, 
+  y = 0.022, 
+  just = c("left", "bottom"),
+  gp = gpar(
+    col = "#202020",
+    fontsize = 8,
+    fontfamily = "Econ Sans Cnd"
+  )
+)
+
+grid.lines(
+  x = c(0.05, 1),
+  y = 1,
+  gp = gpar(col = "#202020", lwd = 2)
+)
+
+grid.rect(
+  x = 0.05,
+  y = 1,
+  width = 0.05,
+  height = 0.025,
+  just = c("left", "top"),
+  gp = gpar(fill = "#202020", lwd = 0)
+)
+
+
+```
+Here we can see that 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
